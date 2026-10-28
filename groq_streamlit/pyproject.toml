@@ -1,0 +1,25 @@
+[project]
+name = "groq-streamlit"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "ayalkadimail", email = "al.kadiriaya.502@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "groq>=1.7.0",
+    "streamlit>=1.66.1",
+]
+
+[project.scripts]
+groq-streamlit = "groq_streamlit:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.uv.workspace]
+members = [
+    "groq_streamlit",
+]
