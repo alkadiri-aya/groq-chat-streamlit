@@ -2,8 +2,14 @@ import streamlit as st
 from typing import Generator
 from groq import Groq
 
+import db  # our SQLite helper (db.py, same folder as this file)
+
 st.set_page_config(page_icon="🎀", layout="wide",
                    page_title="Groq Goes mewwwwww...")
+
+# Create the database tables if they don't exist yet.
+# Safe to run on every rerun (it uses CREATE TABLE IF NOT EXISTS).
+db.init_db()
 
 
 def icon(emoji: str):
@@ -22,12 +28,17 @@ client = Groq(
     api_key=st.secrets["GROQ_API_KEY"],
 )
 
-# Initialize chat history and selected model
+# Initialize the values kept between reruns
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 if "selected_model" not in st.session_state:
     st.session_state.selected_model = None
+
+# id of the conversation in the database.
+# None means "no conversation yet": it is created at the first message.
+if "conversation_id" not in st.session_state:
+    st.session_state.conversation_id = None
 
 # Define model details
 models = {
@@ -50,9 +61,12 @@ with col1:
         index=0,  # 0 = first model in the dictionary (GPT-OSS 120B)
     )
 
-# Detect model change and clear chat history if model has changed
+# If the user switches model, start a fresh chat.
+# The "is not None" check avoids resetting on the very first run.
 if st.session_state.selected_model != model_option:
-    st.session_state.messages = []
+    if st.session_state.selected_model is not None:
+        st.session_state.messages = []
+        st.session_state.conversation_id = None  # new conversation at next message
     st.session_state.selected_model = model_option
 
 max_tokens_range = models[model_option]["max_tokens"]
@@ -61,12 +75,11 @@ with col2:
     # Adjust max_tokens slider dynamically based on the selected model
     max_tokens = st.slider(
         "Max Tokens:",
-        min_value=512,  # Minimum value to allow some flexibility
+        min_value=512,
         max_value=max_tokens_range,
-        # Default value or max allowed if less
         value=min(32768, max_tokens_range),
         step=512,
-        help=f"Adjust the maximum number of tokens (words) for the model's response. Max for selected model: {max_tokens_range}"
+        help=f"Maximum number of tokens for the model's response. Max for selected model: {max_tokens_range}"
     )
 
 # Display chat messages from history on app rerun
@@ -84,7 +97,17 @@ def generate_chat_responses(chat_completion) -> Generator[str, None, None]:
 
 
 if prompt := st.chat_input("Enter your prompt here..."):
+    # First message of a new chat: create the conversation in the database.
+    # The title is the first 40 characters of the question.
+    if st.session_state.conversation_id is None:
+        st.session_state.conversation_id = db.create_conversation(
+            title=prompt[:40]
+        )
+    conv_id = st.session_state.conversation_id
+
+    # Save the user's message (in memory for display, in the database for good)
     st.session_state.messages.append({"role": "user", "content": prompt})
+    db.add_message(conv_id, "user", prompt)
 
     with st.chat_message("user", avatar='👩‍💻'):
         st.markdown(prompt)
@@ -94,29 +117,25 @@ if prompt := st.chat_input("Enter your prompt here..."):
         chat_completion = client.chat.completions.create(
             model=model_option,
             messages=[
-                {
-                    "role": m["role"],
-                    "content": m["content"]
-                }
+                {"role": m["role"], "content": m["content"]}
                 for m in st.session_state.messages
             ],
             max_tokens=max_tokens,
-            stream=True
+            stream=True,
         )
 
-        # Use the generator function with st.write_stream
         with st.chat_message("assistant", avatar="🤖"):
-            chat_responses_generator = generate_chat_responses(chat_completion)
-            full_response = st.write_stream(chat_responses_generator)
-    except Exception as e:
-        st.error(e, icon="🚨")
+            # write_stream shows the text live and returns the full answer
+            full_response = st.write_stream(
+                generate_chat_responses(chat_completion)
+            )
 
-    # Append the full response to session_state.messages
-    if isinstance(full_response, str):
+        # Only reached if the API call worked: save the assistant's answer
         st.session_state.messages.append(
-            {"role": "assistant", "content": full_response})
-    else:
-        # Handle the case where full_response is not a string
-        combined_response = "\n".join(str(item) for item in full_response)
-        st.session_state.messages.append(
-            {"role": "assistant", "content": combined_response})
+            {"role": "assistant", "content": full_response}
+        )
+        db.add_message(conv_id, "assistant", full_response)
+
+    except Exception as e:
+        # Show the error in the app instead of crashing
+        st.error(e, icon="🚨")
