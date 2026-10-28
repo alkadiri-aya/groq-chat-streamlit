@@ -23,3 +23,8 @@ build-backend = "uv_build"
 members = [
     "groq_streamlit",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
